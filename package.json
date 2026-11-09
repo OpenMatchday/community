@@ -1,0 +1,22 @@
+{
+  "name": "open-matchday-community",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Open Matchday community backend (Google OIDC contribution service)",
+  "scripts": {
+    "check": "node --experimental-strip-types scripts/check-spike.mjs",
+    "dev": "vercel dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "hono": "^4.11.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.1",
+    "typescript": "^5.9.3"
+  }
+}
