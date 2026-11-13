@@ -85,6 +85,17 @@ export const loadConfig = () => {
     .map((s) => s.trim())
     .filter(Boolean)
 
+  const githubAppClientId = requiredInProd('GITHUB_APP_CLIENT_ID')
+  const githubAppId = requiredInProd('GITHUB_APP_ID')
+  const githubAppPrivateKey = requiredInProd('GITHUB_APP_PRIVATE_KEY')
+  const githubAppInstallationId = requiredInProd('GITHUB_APP_INSTALLATION_ID')
+  const githubAppConfigured = Boolean(
+    githubAppClientId &&
+      githubAppId &&
+      githubAppPrivateKey &&
+      githubAppInstallationId,
+  )
+
   return {
     isProduction,
     authTestMode,
@@ -96,6 +107,17 @@ export const loadConfig = () => {
     websiteOrigins,
     databaseUrl: requiredInProd('DATABASE_URL'),
     googleOidcConfigured: Boolean(googleClientId && googleClientSecret),
+    githubAppClientId,
+    githubAppId,
+    githubAppPrivateKey,
+    githubAppInstallationId,
+    githubAppConfigured,
+    githubAppSlug:
+      requiredInProd('GITHUB_APP_SLUG') ?? 'open-matchday-community',
+    githubOwner: requiredInProd('GITHUB_OWNER') ?? 'OpenMatchday',
+    githubRepo: requiredInProd('GITHUB_REPO') ?? 'teams',
+    githubBaseBranch: requiredInProd('GITHUB_BASE_BRANCH') ?? 'main',
+    githubApiBase: requiredInProd('GITHUB_API_BASE') ?? 'https://api.github.com',
   }
 }
 

@@ -34,6 +34,9 @@ export type SubmissionRow = {
   draftJson: unknown
   previewJson: unknown
   status: SubmissionStatus
+  prUrl: string | null
+  prNumber: number | null
+  branchName: string | null
   createdAt: string
   updatedAt: string
 }
@@ -71,4 +74,10 @@ export type Store = {
   listSubmissionsForContributor: (
     contributorId: string,
   ) => Promise<SubmissionRow[]>
+  markSubmissionPrOpened: (input: {
+    id: string
+    prUrl: string
+    prNumber: number
+    branchName: string
+  }) => Promise<SubmissionRow>
 }

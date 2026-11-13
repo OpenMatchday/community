@@ -28,6 +28,8 @@ import {
   validateSubmitMeta,
   type WizardDraft,
 } from './wizard/validate.js'
+import { processQueuedSubmission } from './github/pr.js'
+import type { FetchLike } from './github/auth.js'
 
 const SESSION_TTL_SEC = 60 * 60 * 12
 const OAUTH_STATE_COOKIE = 'om_oauth_state'
@@ -59,9 +61,11 @@ const readJson = async (c: { req: { json: () => Promise<unknown> } }) => {
 export const createApp = (options?: {
   config?: AppConfig
   store?: Store
+  fetchImpl?: FetchLike
 }) => {
   const config = options?.config ?? loadConfig()
   const store = options?.store ?? getStore(config)
+  const fetchImpl = options?.fetchImpl
   const app = new Hono()
 
   const requireSessionSecret = () => {
@@ -112,11 +116,14 @@ export const createApp = (options?: {
         '/v1/wizard/submit',
         '/v1/images',
         '/v1/submissions/:id',
+        '/v1/submissions/:id/open-pr',
       ],
       google_oidc_configured: config.googleOidcConfigured,
+      github_app_configured: config.githubAppConfigured,
       auth_test_mode: config.authTestMode,
       sources: [
         'https://developers.google.com/identity/protocols/oauth2/openid-connect',
+        'https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app',
       ],
     }),
   )
@@ -126,6 +133,7 @@ export const createApp = (options?: {
       ok: true,
       service: 'open-matchday-community',
       google_oidc_configured: config.googleOidcConfigured,
+      github_app_configured: config.githubAppConfigured,
       database: Boolean(config.databaseUrl),
     }),
   )
@@ -469,7 +477,7 @@ export const createApp = (options?: {
     })
 
     await store.ensureSchema()
-    const { submission, created } = await store.createSubmission({
+    let { submission, created } = await store.createSubmission({
       contributorId: auth.contributorId,
       idempotencyKey: String(body.idempotency_key),
       handle: String(body.handle),
@@ -481,14 +489,85 @@ export const createApp = (options?: {
       previewJson: preview,
     })
 
+    let prError: string | null = null
+    if (created && config.githubAppConfigured && submission.status === 'queued') {
+      try {
+        const processed = await processQueuedSubmission({
+          config,
+          store,
+          submissionId: submission.id,
+          fetchImpl,
+        })
+        submission = processed.submission
+      } catch (err) {
+        prError = err instanceof Error ? err.message : 'pr_open_failed'
+      }
+    }
+
     return c.json(
       {
         ok: true,
         created,
         submission: publicSubmissionView(submission),
+        pr_error: prError,
       },
       created ? 201 : 200,
     )
+  })
+
+  app.post('/v1/submissions/:id/open-pr', async (c) => {
+    const auth = await resolveAuth(c.req.header('cookie'))
+    if (!auth) return c.json({ ok: false, error: 'unauthorized' }, 401)
+    if (!config.githubAppConfigured) {
+      return c.json(
+        {
+          ok: false,
+          error: 'github_app_not_configured',
+          message:
+            'Set GITHUB_APP_CLIENT_ID, GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_APP_INSTALLATION_ID as Vercel Secrets after registering the org GitHub App.',
+          sources: [
+            'https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app',
+          ],
+        },
+        503,
+      )
+    }
+    const id = c.req.param('id')
+    const existing = await store.getSubmission(id)
+    if (!existing) return c.json({ ok: false, error: 'not_found' }, 404)
+    if (existing.contributorId !== auth.contributorId) {
+      return c.json({ ok: false, error: 'forbidden' }, 403)
+    }
+    try {
+      const processed = await processQueuedSubmission({
+        config,
+        store,
+        submissionId: id,
+        fetchImpl,
+      })
+      return c.json({
+        ok: true,
+        submission: publicSubmissionView(processed.submission),
+        pr: processed.opened
+          ? {
+              url: processed.opened.prUrl,
+              number: processed.opened.prNumber,
+              branch: processed.opened.branch,
+              paths: processed.opened.paths,
+              token_expires_at: processed.opened.tokenExpiresAt,
+            }
+          : null,
+      })
+    } catch (err) {
+      return c.json(
+        {
+          ok: false,
+          error: 'pr_open_failed',
+          message: err instanceof Error ? err.message : 'unknown',
+        },
+        502,
+      )
+    }
   })
 
   app.get('/v1/submissions/:id', async (c) => {

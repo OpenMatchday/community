@@ -41,10 +41,16 @@ const SCHEMA_STATEMENTS = [
   draft_json JSONB NOT NULL,
   preview_json JSONB NOT NULL,
   status TEXT NOT NULL,
+  pr_url TEXT,
+  pr_number INT,
+  branch_name TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (contributor_id, idempotency_key)
 )`,
+  `ALTER TABLE om_submissions ADD COLUMN IF NOT EXISTS pr_url TEXT`,
+  `ALTER TABLE om_submissions ADD COLUMN IF NOT EXISTS pr_number INT`,
+  `ALTER TABLE om_submissions ADD COLUMN IF NOT EXISTS branch_name TEXT`,
 ]
 
 type Row = Record<string, unknown>
@@ -101,6 +107,9 @@ const mapSubmission = (row: Row): SubmissionRow => ({
   draftJson: row.draft_json,
   previewJson: row.preview_json,
   status: String(row.status) as SubmissionStatus,
+  prUrl: row.pr_url == null ? null : String(row.pr_url),
+  prNumber: row.pr_number == null ? null : Number(row.pr_number),
+  branchName: row.branch_name == null ? null : String(row.branch_name),
   createdAt: new Date(String(row.created_at)).toISOString(),
   updatedAt: new Date(String(row.updated_at)).toISOString(),
 })
@@ -202,7 +211,8 @@ export const createPostgresStore = (databaseUrl: string): Store => {
       await ensureSchema()
       const existing = asRows(await sql`
         SELECT id, contributor_id, idempotency_key, handle, profile_url,
-               draft_json, preview_json, status, created_at, updated_at
+               draft_json, preview_json, status, pr_url, pr_number, branch_name,
+               created_at, updated_at
         FROM om_submissions
         WHERE contributor_id = ${input.contributorId}
           AND idempotency_key = ${input.idempotencyKey}
@@ -230,7 +240,8 @@ export const createPostgresStore = (databaseUrl: string): Store => {
           ${'queued'}
         )
         RETURNING id, contributor_id, idempotency_key, handle, profile_url,
-                  draft_json, preview_json, status, created_at, updated_at
+                  draft_json, preview_json, status, pr_url, pr_number, branch_name,
+                  created_at, updated_at
       `)
       return {
         submission: mapSubmission(inserted[0]),
@@ -242,7 +253,8 @@ export const createPostgresStore = (databaseUrl: string): Store => {
       await ensureSchema()
       const rows = asRows(await sql`
         SELECT id, contributor_id, idempotency_key, handle, profile_url,
-               draft_json, preview_json, status, created_at, updated_at
+               draft_json, preview_json, status, pr_url, pr_number, branch_name,
+               created_at, updated_at
         FROM om_submissions WHERE id = ${id} LIMIT 1
       `)
       if (!rows[0]) return null
@@ -253,12 +265,31 @@ export const createPostgresStore = (databaseUrl: string): Store => {
       await ensureSchema()
       const rows = asRows(await sql`
         SELECT id, contributor_id, idempotency_key, handle, profile_url,
-               draft_json, preview_json, status, created_at, updated_at
+               draft_json, preview_json, status, pr_url, pr_number, branch_name,
+               created_at, updated_at
         FROM om_submissions
         WHERE contributor_id = ${contributorId}
         ORDER BY created_at DESC
       `)
       return rows.map((row) => mapSubmission(row))
+    },
+
+    markSubmissionPrOpened: async ({ id, prUrl, prNumber, branchName }) => {
+      await ensureSchema()
+      const rows = asRows(await sql`
+        UPDATE om_submissions
+        SET status = ${'pr_opened'},
+            pr_url = ${prUrl},
+            pr_number = ${prNumber},
+            branch_name = ${branchName},
+            updated_at = now()
+        WHERE id = ${id}
+        RETURNING id, contributor_id, idempotency_key, handle, profile_url,
+                  draft_json, preview_json, status, pr_url, pr_number, branch_name,
+                  created_at, updated_at
+      `)
+      if (!rows[0]) throw new Error('submission_not_found')
+      return mapSubmission(rows[0])
     },
   }
 }

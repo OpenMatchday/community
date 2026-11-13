@@ -76,6 +76,9 @@ export const publicSubmissionView = (row: {
   profileUrl: string | null
   status: string
   previewJson: unknown
+  prUrl?: string | null
+  prNumber?: number | null
+  branchName?: string | null
   createdAt: string
   updatedAt: string
 }) => ({
@@ -84,6 +87,9 @@ export const publicSubmissionView = (row: {
   profile_url: row.profileUrl,
   status: row.status,
   preview: row.previewJson,
+  pr_url: row.prUrl ?? null,
+  pr_number: row.prNumber ?? null,
+  branch_name: row.branchName ?? null,
   created_at: row.createdAt,
   updated_at: row.updatedAt,
 })

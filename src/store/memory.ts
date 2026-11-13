@@ -95,6 +95,9 @@ export const createMemoryStore = (): Store => {
         draftJson: input.draftJson,
         previewJson: input.previewJson,
         status: 'queued',
+        prUrl: null,
+        prNumber: null,
+        branchName: null,
         createdAt: nowIso(),
         updatedAt: nowIso(),
       }
@@ -109,5 +112,20 @@ export const createMemoryStore = (): Store => {
       [...submissions.values()]
         .filter((s) => s.contributorId === contributorId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+
+    markSubmissionPrOpened: async ({ id, prUrl, prNumber, branchName }) => {
+      const existing = submissions.get(id)
+      if (!existing) throw new Error('submission_not_found')
+      const row: SubmissionRow = {
+        ...existing,
+        status: 'pr_opened',
+        prUrl,
+        prNumber,
+        branchName,
+        updatedAt: nowIso(),
+      }
+      submissions.set(id, row)
+      return row
+    },
   }
 }

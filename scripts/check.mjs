@@ -41,6 +41,86 @@ const loadApp = async (env) => {
     `${pathToFileURL(path.join(repoRoot, 'src', 'store', 'memory.ts')).href}?t=${Date.now()}`
   )
   const store = createMemoryStore()
+  const { generateKeyPairSync } = await import('node:crypto')
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    const method = init?.method ?? 'GET'
+    calls.push({ url, method, body: init?.body })
+    if (url.endsWith('/access_tokens')) {
+      const body = JSON.parse(init.body)
+      assert(body.repositories[0] === 'teams', 'token scoped to teams')
+      assert(body.permissions.contents === 'write', 'contents write')
+      assert(body.permissions.pull_requests === 'write', 'pr write')
+      return {
+        ok: true,
+        status: 201,
+        text: async () =>
+          JSON.stringify({
+            token: 'ghs_check_token',
+            expires_at: new Date(Date.now() + 50 * 60 * 1000).toISOString(),
+            permissions: body.permissions,
+            repositories: [{ name: 'teams' }],
+          }),
+        json: async () => ({}),
+      }
+    }
+    if (url.includes('/git/ref/heads/main') && method === 'GET') {
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            object: { sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+          }),
+        json: async () => ({}),
+      }
+    }
+    if (url.endsWith('/git/refs') && method === 'POST') {
+      const body = JSON.parse(init.body)
+      assert(body.ref.startsWith('refs/heads/community/contrib-'), 'contrib branch')
+      assert(body.ref !== 'refs/heads/main', 'not main')
+      return {
+        ok: true,
+        status: 201,
+        text: async () => JSON.stringify({ ref: body.ref }),
+        json: async () => ({}),
+      }
+    }
+    if (url.includes('/contents/') && method === 'PUT') {
+      const body = JSON.parse(init.body)
+      assert(body.branch !== 'main', 'contents not on main')
+      assert(body.committer.email.includes('users.noreply.github.com'), 'bot email')
+      assert(!body.committer.email.includes('gmail'), 'no gmail')
+      return {
+        ok: true,
+        status: 201,
+        text: async () => JSON.stringify({ content: { path: 'ok' } }),
+        json: async () => ({}),
+      }
+    }
+    if (url.endsWith('/pulls') && method === 'POST') {
+      const body = JSON.parse(init.body)
+      assert(body.head.startsWith('community/contrib-'), 'pr head')
+      assert(body.base === 'main', 'pr base main')
+      assert(body.body.includes('river_q'), 'handle credited')
+      assert(!/gmail\.com/i.test(body.body), 'no google email in pr')
+      return {
+        ok: true,
+        status: 201,
+        text: async () =>
+          JSON.stringify({
+            number: 7,
+            html_url: 'https://github.com/OpenMatchday/teams/pull/7',
+          }),
+        json: async () => ({}),
+      }
+    }
+    throw new Error(`unexpected ${method} ${url}`)
+  }
+
   const config = {
     isProduction: false,
     authTestMode: true,
@@ -52,8 +132,20 @@ const loadApp = async (env) => {
     websiteOrigins: ['https://openmatchday.github.io', 'http://127.0.0.1:4173'],
     databaseUrl: undefined,
     googleOidcConfigured: false,
+    githubAppConfigured: true,
+    githubAppClientId: 'Iv1.check',
+    githubAppId: '4242',
+    githubAppPrivateKey: privateKeyPem,
+    githubAppInstallationId: '1001',
+    githubAppSlug: 'open-matchday-community',
+    githubOwner: 'OpenMatchday',
+    githubRepo: 'teams',
+    githubBaseBranch: 'main',
+    githubApiBase: 'https://api.github.com',
   }
-  return mod.createApp({ config, store })
+  const app = mod.createApp({ config, store, fetchImpl })
+  app.__omCheckCalls = calls
+  return app
 }
 
 const serveApp = async (app) => {
@@ -130,6 +222,7 @@ const main = async () => {
     const health = await readJson(await fetch(`${base}/health`))
     assert(health.ok === true, 'health ok')
     assert(health.google_oidc_configured === false, 'oidc flag')
+    assert(health.github_app_configured === true, 'github app flag in check harness')
 
     const secretBody = await readJson(await fetch(`${base}/spike/secret-read`))
     assert(secretBody.present === true, 'secret present')
@@ -266,7 +359,13 @@ const main = async () => {
       }),
     )
     assert(submit1.ok === true && submit1.created === true, 'submit create')
-    assert(submit1.submission.status === 'queued', 'status queued')
+    assert(submit1.submission.status === 'pr_opened', 'status pr_opened after GitHub App')
+    assert(
+      submit1.submission.pr_url === 'https://github.com/OpenMatchday/teams/pull/7',
+      'pr url',
+    )
+    assert(submit1.submission.branch_name.startsWith('community/contrib-'), 'branch')
+    assert(!JSON.stringify(submit1).includes('check@example.test'), 'email leak submit')
 
     const submit2 = await readJson(
       await fetch(`${base}/v1/wizard/submit`, {
@@ -281,13 +380,18 @@ const main = async () => {
     const status = await readJson(
       await fetch(`${base}/v1/submissions/${submit1.submission.id}`),
     )
-    assert(status.submission.status === 'queued', 'status page queued')
+    assert(status.submission.status === 'pr_opened', 'status page pr_opened')
     assert(
       ['queued', 'pr_opened', 'changes_requested', 'merged', 'rejected'].includes(
         status.submission.status,
       ),
       'status enum',
     )
+
+    const calls = app.__omCheckCalls ?? []
+    assert(calls.some((c) => c.url.endsWith('/access_tokens')), 'installation token')
+    assert(calls.some((c) => c.url.endsWith('/pulls') && c.method === 'POST'), 'pr created')
+    assert(!calls.some((c) => c.url.includes('/merge')), 'no auto-merge')
 
     // Keep spike check fixture path for CI continuity.
     assert(readFileSync(path.join(repoRoot, 'LICENSE'), 'utf8').includes('MIT'), 'license')
