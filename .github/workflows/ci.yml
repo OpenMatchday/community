@@ -21,7 +21,15 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
-      - name: Spike check
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+        env:
+          OM_AUTH_TEST_MODE: '1'
+          OM_SPIKE_SECRET: ci-local-only-not-a-production-secret
+      - name: Check
         run: npm run check
         env:
+          OM_AUTH_TEST_MODE: '1'
           OM_SPIKE_SECRET: ci-local-only-not-a-production-secret
